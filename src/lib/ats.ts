@@ -63,8 +63,8 @@ export interface AiAtsAnalysis {
   overallAssessment: string;
   strengthAreas: string[];
   improvementAreas: string[];
-  keywordSuggestions: string[];
-  bulletRewrites: { original: string; improved: string; reason: string }[];
+  keywordSuggestions: { keyword: string; sourceQuote: string }[];
+  bulletRewrites: { original: string; improved: string; reason: string; sourceQuote?: string }[];
   tailoredSummary: string;
   industryInsights: string;
   competitiveScore: number;
@@ -583,25 +583,57 @@ function keywordMatchScore(
   };
 }
 
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+  for (let i = 0; i <= a.length; i += 1) matrix[0][i] = i;
+  for (let j = 0; j <= b.length; j += 1) matrix[j][0] = j;
+  for (let j = 1; j <= b.length; j += 1) {
+    for (let i = 1; i <= a.length; i += 1) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1, // deletion
+        matrix[j - 1][i] + 1, // insertion
+        matrix[j - 1][i - 1] + indicator // substitution
+      );
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+function isSemanticSkillMatch(resumeSkill: string, jdSkill: string): boolean {
+  if (resumeSkill === jdSkill) return true;
+  if (resumeSkill.includes(jdSkill) || jdSkill.includes(resumeSkill)) return true;
+  
+  // Clean up and compare (e.g., "node.js" vs "nodejs")
+  const cleanR = resumeSkill.replace(/[^a-z0-9]/g, "");
+  const cleanJ = jdSkill.replace(/[^a-z0-9]/g, "");
+  if (cleanR && cleanJ && (cleanR === cleanJ || cleanR.includes(cleanJ) || cleanJ.includes(cleanR))) return true;
+
+  // Fuzzy match for typos (allow 1-2 typos depending on length)
+  const maxDistance = jdSkill.length > 5 ? 2 : 1;
+  if (levenshteinDistance(resumeSkill, jdSkill) <= maxDistance) return true;
+
+  return false;
+}
+
 function skillsCoverageScore(
   resumeSkills: string[],
   requiredSkills: string[],
   preferredSkills: string[],
   aiMatches?: AiScoringEnhancement["contextualSkillMatches"]
 ): { score: number; matchedRequired: string[]; missingRequired: string[] } {
-  const resumeSkillsLower = new Set(resumeSkills.map(s => s.toLowerCase()));
+  const resumeSkillsLower = Array.from(new Set(resumeSkills.map(s => s.toLowerCase())));
   const matchedRequired: string[] = [];
   const missingRequired: string[] = [];
 
   for (const skill of requiredSkills) {
     const skillLower = skill.toLowerCase();
-    const directMatch = resumeSkillsLower.has(skillLower) || 
-                       Array.from(resumeSkillsLower).some(rs => 
-                         rs.includes(skillLower) || skillLower.includes(rs)
-                       );
+    const directMatch = resumeSkillsLower.some(rs => isSemanticSkillMatch(rs, skillLower));
     
     const aiMatch = aiMatches?.some(m => 
-      m.skill.toLowerCase() === skillLower && m.relevanceScore > 50
+      isSemanticSkillMatch(m.skill.toLowerCase(), skillLower) && m.relevanceScore > 50
     );
 
     if (directMatch || aiMatch) {
@@ -681,30 +713,41 @@ function bulletImpactScore(bullets: string[]): number {
     const firstWord = words[0]?.toLowerCase().replace(/[^a-z]/g, "") || "";
 
     // Action verb (0-0.35)
-    if (ACTION_VERBS_TIER1.has(firstWord)) bulletScore += 0.35;
-    else if (ACTION_VERBS_TIER2.has(firstWord)) bulletScore += 0.25;
+    let hasStrongActionVerb = false;
+    if (ACTION_VERBS_TIER1.has(firstWord)) { bulletScore += 0.35; hasStrongActionVerb = true; }
+    else if (ACTION_VERBS_TIER2.has(firstWord)) { bulletScore += 0.25; hasStrongActionVerb = true; }
     else if (ACTION_VERBS_TIER3.has(firstWord)) bulletScore += 0.15;
     else if (WEAK_VERBS.has(firstWord)) bulletScore += 0;
     else bulletScore += 0.05;
 
-    // Quantification (0-0.35)
+    // True Impact/STAR Validation (0-0.35)
+    // Looking for a logical connection between the action, context, and metric
     const hasPercent = /%/.test(b);
     const hasDollar = /\$\d+/.test(b);
-    const hasNumber = /\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b/.test(b);
-    const hasMetric = /\b(?:increased|decreased|reduced|improved|grew|saved|generated)\b.*\b\d+/i.test(b);
+    const hasNumber = /\b\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:k|m|b|x)?\b/i.test(b);
+    
+    // Specific business value markers
+    const hasBusinessValue = /\b(?:increased|decreased|reduced|improved|grew|saved|generated|accelerated|optimized|scaled)\b/i.test(b);
+    const hasContext = /\b(?:by|resulting in|leading to|which led|enabling|contributing to|through|using)\b/i.test(b);
 
-    if ((hasPercent || hasDollar) && hasMetric) bulletScore += 0.35;
-    else if (hasPercent || hasDollar) bulletScore += 0.25;
-    else if (hasNumber && hasMetric) bulletScore += 0.20;
-    else if (hasNumber) bulletScore += 0.10;
+    if (hasBusinessValue && (hasPercent || hasDollar) && hasContext) {
+      bulletScore += 0.35; // Perfect STAR statement
+    } else if ((hasPercent || hasDollar) && hasBusinessValue) {
+      bulletScore += 0.25; // Missing clear context connector, but has metric + value
+    } else if (hasNumber && hasBusinessValue) {
+      bulletScore += 0.20; // Number + value
+    } else if (hasNumber) {
+      bulletScore += 0.10; // Just a number (could be "managed 5 people")
+    }
 
     // Length (0-0.15)
     if (words.length >= 10 && words.length <= 25) bulletScore += 0.15;
     else if (words.length >= 5 && words.length <= 30) bulletScore += 0.10;
     else bulletScore += 0.03;
 
-    // Impact language (0-0.10)
-    if (/\b(?:resulting in|leading to|which led|enabling|contributing to)\b/i.test(b)) {
+    // Advanced Impact language (0-0.10)
+    // Checking if they explain *how* they did it
+    if (/\b(?:by|through|using|utilizing|leveraging|partnering with)\b/i.test(b)) {
       bulletScore += 0.10;
     }
 
@@ -1228,12 +1271,18 @@ Return JSON:
   "overallAssessment": "3-4 sentences. Be honest about fit. What are the biggest strengths and gaps?",
   "strengthAreas": ["5 specific strengths with evidence from resume"],
   "improvementAreas": ["5 specific weaknesses explaining why they matter for THIS role"],
-  "keywordSuggestions": ["10 specific missing keywords from the JD that should be added"],
+  "keywordSuggestions": [
+    {
+      "keyword": "specific missing keyword",
+      "sourceQuote": "Exact quote from Job Description showing why this is needed"
+    }
+  ],
   "bulletRewrites": [
     {
       "original": "Exact quote from resume",
       "improved": "Dramatically improved version with STAR method and metrics",
-      "reason": "Why the original was weak and how the new version is better"
+      "reason": "Why the original was weak and how the new version is better",
+      "sourceQuote": "Optional exact quote from Job Description that inspired this change"
     }
   ],
   "tailoredSummary": "A completely rewritten 3-4 sentence professional summary tailored to this exact job",

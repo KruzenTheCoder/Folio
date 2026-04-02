@@ -591,6 +591,11 @@ export default function CanvasEditorPage() {
                       <div className="space-y-2">
                         {atsBulletRewrites.map((rw, i) => (
                           <div key={i} className="bg-white/5 rounded p-2 text-[10px] border border-white/10">
+                            {rw.sourceQuote && (
+                              <div className="mb-2 p-1.5 bg-blue-500/10 border-l-2 border-blue-400 text-blue-200/80 italic text-[9px]">
+                                "{rw.sourceQuote}"
+                              </div>
+                            )}
                             <div className="text-white/40 line-through mb-1.5">{rw.original}</div>
                             <div className="text-emerald-300/90 mb-2 font-medium">{rw.improved}</div>
                             <button 

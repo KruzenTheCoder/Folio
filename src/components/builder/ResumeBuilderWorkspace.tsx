@@ -6,7 +6,8 @@ import { useResumeStore } from "@/stores/resume-store";
 import { ParseResult, ResumeData, ClarifyingQuestion } from "@/types/resume";
 import { z } from "zod";
 import { useRouter } from "next/navigation";
-import { Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
+import { GripVertical, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 
 const steps = [
@@ -297,6 +298,25 @@ export function ResumeBuilderWorkspace() {
     }
   };
 
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+    const sourceIndex = result.source.index;
+    const destinationIndex = result.destination.index;
+    if (sourceIndex === destinationIndex) return;
+
+    if (currentStep === 2) {
+      const items = Array.from(data.experience);
+      const [reorderedItem] = items.splice(sourceIndex, 1);
+      items.splice(destinationIndex, 0, reorderedItem);
+      patchData({ experience: items });
+    } else if (currentStep === 3) {
+      const items = Array.from(data.education);
+      const [reorderedItem] = items.splice(sourceIndex, 1);
+      items.splice(destinationIndex, 0, reorderedItem);
+      patchData({ education: items });
+    }
+  };
+
   const onNext = () => {
     setStepError(null);
     if (currentStep === 0) {
@@ -386,55 +406,97 @@ export function ResumeBuilderWorkspace() {
           )}
 
           {currentStep === 2 && (
-            <div className="space-y-4">
-              {data.experience.map((exp) => (
-                <div key={exp.id} className="glass rounded-xl p-4 space-y-2">
-                  <div className="flex gap-2">
-                    <input className="glass-input rounded-lg px-3 py-2 flex-1" value={exp.jobTitle} onChange={(e) => updateExperience(exp.id, { jobTitle: e.target.value })} />
-                    <input className="glass-input rounded-lg px-3 py-2 flex-1" value={exp.company} onChange={(e) => updateExperience(exp.id, { company: e.target.value })} />
-                    <button className="px-3 py-2 rounded-lg bg-red-500/20" onClick={() => removeExperience(exp.id)}>Remove</button>
+            <DragDropContext onDragEnd={onDragEnd}>
+              <Droppable droppableId="experience-list">
+                {(provided) => (
+                  <div className="space-y-4" {...provided.droppableProps} ref={provided.innerRef}>
+                    {data.experience.map((exp, index) => (
+                      <Draggable key={exp.id} draggableId={exp.id} index={index}>
+                        {(provided) => (
+                          <div
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            className="glass rounded-xl p-4 space-y-2 relative group"
+                          >
+                            <div
+                              {...provided.dragHandleProps}
+                              className="absolute left-2 top-1/2 -translate-y-1/2 p-2 opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-white/80 cursor-grab active:cursor-grabbing"
+                            >
+                              <GripVertical size={16} />
+                            </div>
+                            <div className="flex gap-2 pl-6">
+                              <input className="glass-input rounded-lg px-3 py-2 flex-1" value={exp.jobTitle} onChange={(e) => updateExperience(exp.id, { jobTitle: e.target.value })} />
+                              <input className="glass-input rounded-lg px-3 py-2 flex-1" value={exp.company} onChange={(e) => updateExperience(exp.id, { company: e.target.value })} />
+                              <button className="px-3 py-2 rounded-lg bg-red-500/20" onClick={() => removeExperience(exp.id)}>Remove</button>
+                            </div>
+                            <textarea
+                              className="glass-input rounded-lg w-full p-3 pl-8"
+                              value={Array.isArray(exp.responsibilities) 
+                                ? exp.responsibilities.map(b => typeof b === 'string' ? b : (b as any).actionItem || (b as any).message || JSON.stringify(b)).join("\n") 
+                                : exp.responsibilities}
+                              onChange={(e) => updateExperience(exp.id, { responsibilities: e.target.value.split("\n").filter(Boolean) })}
+                              placeholder="One bullet per line"
+                            />
+                          </div>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                    <button
+                      className="px-4 py-2 rounded-lg bg-white/10"
+                      onClick={() =>
+                        addExperience({
+                          jobTitle: "Role",
+                          company: "Company",
+                          startDate: "2024",
+                          endDate: "",
+                          isCurrentRole: true,
+                          responsibilities: ["Delivered measurable impact."],
+                        })
+                      }
+                    >
+                      Add Experience
+                    </button>
                   </div>
-                  <textarea
-                    className="glass-input rounded-lg w-full p-3"
-                    value={Array.isArray(exp.responsibilities) 
-                      ? exp.responsibilities.map(b => typeof b === 'string' ? b : (b as any).actionItem || (b as any).message || JSON.stringify(b)).join("\n") 
-                      : exp.responsibilities}
-                    onChange={(e) => updateExperience(exp.id, { responsibilities: e.target.value.split("\n").filter(Boolean) })}
-                    placeholder="One bullet per line"
-                  />
-                </div>
-              ))}
-              <button
-                className="px-4 py-2 rounded-lg bg-white/10"
-                onClick={() =>
-                  addExperience({
-                    jobTitle: "Role",
-                    company: "Company",
-                    startDate: "2024",
-                    endDate: "",
-                    isCurrentRole: true,
-                    responsibilities: ["Delivered measurable impact."],
-                  })
-                }
-              >
-                Add Experience
-              </button>
-            </div>
+                )}
+              </Droppable>
+            </DragDropContext>
           )}
 
           {currentStep === 3 && (
-            <div className="space-y-3">
-              {data.education.map((edu) => (
-                <div key={edu.id} className="glass rounded-xl p-4 flex gap-2">
-                  <input className="glass-input rounded-lg px-3 py-2 flex-1" value={edu.institution} onChange={(e) => updateEducation(edu.id, { institution: e.target.value })} />
-                  <input className="glass-input rounded-lg px-3 py-2 flex-1" value={edu.degree} onChange={(e) => updateEducation(edu.id, { degree: e.target.value })} />
-                  <button className="px-3 py-2 rounded-lg bg-red-500/20" onClick={() => removeEducation(edu.id)}>Remove</button>
-                </div>
-              ))}
-              <button className="px-4 py-2 rounded-lg bg-white/10" onClick={() => addEducation({ institution: "University", degree: "Degree", status: "completed" })}>
-                Add Education
-              </button>
-            </div>
+            <DragDropContext onDragEnd={onDragEnd}>
+              <Droppable droppableId="education-list">
+                {(provided) => (
+                  <div className="space-y-3" {...provided.droppableProps} ref={provided.innerRef}>
+                    {data.education.map((edu, index) => (
+                      <Draggable key={edu.id} draggableId={edu.id} index={index}>
+                        {(provided) => (
+                          <div
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            className="glass rounded-xl p-4 flex gap-2 relative group pl-10"
+                          >
+                            <div
+                              {...provided.dragHandleProps}
+                              className="absolute left-2 top-1/2 -translate-y-1/2 p-2 opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-white/80 cursor-grab active:cursor-grabbing"
+                            >
+                              <GripVertical size={16} />
+                            </div>
+                            <input className="glass-input rounded-lg px-3 py-2 flex-1" value={edu.institution} onChange={(e) => updateEducation(edu.id, { institution: e.target.value })} />
+                            <input className="glass-input rounded-lg px-3 py-2 flex-1" value={edu.degree} onChange={(e) => updateEducation(edu.id, { degree: e.target.value })} />
+                            <button className="px-3 py-2 rounded-lg bg-red-500/20" onClick={() => removeEducation(edu.id)}>Remove</button>
+                          </div>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                    <button className="px-4 py-2 rounded-lg bg-white/10" onClick={() => addEducation({ institution: "University", degree: "Degree", status: "completed" })}>
+                      Add Education
+                    </button>
+                  </div>
+                )}
+              </Droppable>
+            </DragDropContext>
           )}
 
           {currentStep === 4 && (

@@ -15,6 +15,7 @@ export interface LLMOptions {
 const DEFAULT_TIMEOUT_MS = 60000;
 const OLLAMA_ENDPOINT = process.env.LOCAL_LLM_URL || "http://127.0.0.1:11434/api/chat";
 const OLLAMA_MODEL = "gpt-oss:120b-cloud";
+const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const FALLBACK_JSON = JSON.stringify({
   extractedData: { personalInfo: {}, experience: [], education: [], skills: [] },
@@ -46,41 +47,73 @@ export async function callLLM(
     maxRetries = 2,
   } = options;
 
+  const isLocal = (process.env.AI_PROVIDER || "").toLowerCase() === "local" || process.env.LOCAL_LLM === "true";
+  const groqApiKey = process.env.GROQ_API_KEY || process.env.GROK_API_KEY;
+  const useGroq = !isLocal && !!groqApiKey;
+
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    console.info(`[llm] Starting request to ${OLLAMA_ENDPOINT} (Attempt ${attempt}/${maxRetries + 1}) with timeout: ${timeoutMs}ms`);
+    const endpoint = useGroq ? GROQ_API_URL : OLLAMA_ENDPOINT;
+    console.info(`[llm] Starting request to ${endpoint} (Attempt ${attempt}/${maxRetries + 1}) with timeout: ${timeoutMs}ms`);
 
     try {
-      const response = await fetch(OLLAMA_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          messages,
-          stream: false,
-          options: {
-            temperature,
-            num_predict: maxTokens,
+      let response;
+      if (useGroq) {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${groqApiKey}`
           },
-          format: asJson ? 'json' : undefined,
-        }),
-        signal: controller.signal,
-      });
+          body: JSON.stringify({
+            model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+            messages,
+            stream: false,
+            temperature,
+            max_tokens: maxTokens,
+            response_format: asJson ? { type: "json_object" } : undefined,
+          }),
+          signal: controller.signal,
+        });
+      } else {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: OLLAMA_MODEL,
+            messages,
+            stream: false,
+            options: {
+              temperature,
+              num_predict: maxTokens,
+            },
+            format: asJson ? 'json' : undefined,
+          }),
+          signal: controller.signal,
+        });
+      }
 
       if (!response.ok) {
-        throw new Error(`Ollama API Error: ${response.statusText}`);
+        throw new Error(`API Error: ${response.statusText}`);
       }
 
       const data = await response.json();
-      if (!data.message?.content) {
-        throw new Error("No response from Ollama");
+      let content = "";
+      if (useGroq) {
+        if (!data.choices?.[0]?.message?.content) {
+          throw new Error("No response from Groq");
+        }
+        content = data.choices[0].message.content;
+      } else {
+        if (!data.message?.content) {
+          throw new Error("No response from Ollama");
+        }
+        content = data.message.content;
       }
-
-      let content = data.message.content;
 
       // Validate and recover JSON if requested
       if (asJson) {
